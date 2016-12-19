@@ -1,19 +1,23 @@
 #!/usr/bin/env python
+# -*- coding: utf-8 -*-
 
-import sys
+import argparse
+import fnmatch
+from getpass import getpass
 import os
 import shutil
-import subprocess
 import signal
-import qrcode
+import subprocess
+import sys
+
 import psutil
+import qrcode
 from sqlalchemy.orm.exc import NoResultFound
 
-from getpass import getpass
-from argparse import ArgumentParser
 from db import db_session, Journalist
 from management import run
 
+ABS_MODULE_PATH = os.path.dirname(os.path.abspath(__file__))
 # We need to import config in each function because we're running the tests
 # directly, so it's important to set the environment correctly, depending on
 # development or testing, before importing config.
@@ -28,75 +32,154 @@ os.environ['SECUREDROP_ENV'] = 'dev'
 TEST_WORKER_PIDFILE = "/tmp/securedrop_test_worker.pid"
 
 
-def get_pid_from_pidfile(pid_file_name):
-    with open(pid_file_name) as fp:
-        return int(fp.read())
-
-
-def _start_test_rqworker(config):  # pragma: no cover
-    # needed to determine the directory to run the worker in
-    worker_running = False
+def _get_pid_from_file(pid_file_name): # pragma: no cover
     try:
-        if psutil.pid_exists(get_pid_from_pidfile(TEST_WORKER_PIDFILE)):
-            worker_running = True
+        return int(open(pid_file_name).read())
     except IOError:
-        pass
+        return None
 
-    if not worker_running:
+
+def _start_test_rqworker(config): # pragma: no cover
+    if not psutil.pid_exists(_get_pid_from_file(TEST_WORKER_PIDFILE)):
         tmp_logfile = open("/tmp/test_rqworker.log", "w")
-        subprocess.Popen(
-            [
-                "rqworker", "test",
-                "-P", config.SECUREDROP_ROOT,
-                "--pid", TEST_WORKER_PIDFILE,
-            ],
-            stdout=tmp_logfile,
-            stderr=subprocess.STDOUT)
+        subprocess.Popen(["rqworker", "test",
+                          "-P", config.SECUREDROP_ROOT,
+                          "--pid", TEST_WORKER_PIDFILE],
+                         stdout=tmp_logfile,
+                         stderr=subprocess.STDOUT)
 
 
-def _stop_test_rqworker():  # pragma: no cover
-    os.kill(get_pid_from_pidfile(TEST_WORKER_PIDFILE), signal.SIGTERM)
+def _stop_test_rqworker(): # pragma: no cover
+    rqworker_pid = _get_pid_from_file(TEST_WORKER_PIDFILE)
+    if rqworker_pid:
+        os.kill(rqworker_pid, signal.SIGTERM)
+        try:
+            os.remove(TEST_WORKER_PIDFILE)
+        except OSError:
+            pass
 
 
-def test():  # pragma: no cover
-    """
-    Runs the test suite
-    """
+def _cleanup_test_securedrop_dataroot(config): # pragma: no cover
+    # Keyboard interrupts or dropping to pdb after a test failure sometimes
+    # result in the temporary test SecureDrop data root not being deleted.
+    if os.environ['SECUREDROP_ENV'] == 'test':
+        try:
+            shutil.rmtree(config.SECUREDROP_DATA_ROOT)
+        except OSError:
+            pass
+
+
+def _cleanup_test_environment(config): # pragma: no cover
+    _stop_test_rqworker()
+    _cleanup_test_securedrop_dataroot(config)
+
+
+def _run_in_test_environment(cmd): # pragma: no cover
+    """Handles setting up and tearing down the necessary environment to run
+    tests."""
     os.environ['SECUREDROP_ENV'] = 'test'
     import config
     _start_test_rqworker(config)
-    test_cmds = [["py.test", "--cov"], "./test.sh"]
-    test_rc = int(any([subprocess.call(cmd) for cmd in test_cmds]))
-    _stop_test_rqworker()
-    sys.exit(test_rc)
+    try:
+        test_rc = int(subprocess.call(cmd, shell=True))
+        return test_rc
+    finally:
+        _cleanup_test_environment(config)
 
 
-def test_unit():  # pragma: no cover
-    """
-    Runs the unit tests.
-    """
-    os.environ['SECUREDROP_ENV'] = 'test'
-    import config
-    _start_test_rqworker(config)
-    test_rc = int(subprocess.call(["py.test", "--cov"]))
-    _stop_test_rqworker()
-    sys.exit(test_rc)
+def _get_test_module_dict(type):
+    """A convenience function that allows a user to pass, e.g., "journalist"
+    instead of "tests/test_unit_journalist.py"."""
+    if type == 'functional':
+        tests = ['submit_and_retrieve_message', 
+                 'submit_and_retrieve_file', 'admin_interface']
+        test_paths = [os.path.join(ABS_MODULE_PATH, 'tests/functional',
+                                   test, ".py")
+                      for test in tests]
+    elif type == 'unit':
+        tests, test_paths = [], []
+        for file in os.listdir(os.path.join(ABS_MODULE_PATH, 'tests')):
+            if fnmatch.fnmatch(file, 'test_unit_*.py'):
+                tests.append(file[len('test_unit_'):-len('.py')])
+                test_paths.append(os.path.join(ABS_MODULE_PATH, 'tests', file))
+        # Add irregularly named unit tests
+        tests += ['test_journalist', 'test_single_star']
+        test_paths += [os.path.join(ABS_MODULE_PATH), 'tests', file]
+
+    return dict(zip(tests, test_paths))
 
 
-def reset():
-    """
-    Clears the SecureDrop development application's state, restoring it to the
-    way it was immediately after running `setup_dev.sh`. This command:
-    1. Erases the development sqlite database file
-    2. Regenerates the database
-    3. Erases stored submissions and replies from the store dir
+def test(): # pragma: no cover
+    """Runs both functional and unit tests."""
+    cmds = []
+    cmds.append('pytest --cov')
+    for test in _get_test_module_dict('functional').values():
+        cmds.append('python -m unittest -fv {}'.format(test))
+    return any([int(_run_in_test_environment(cmd)) for cmd in cmds])
+
+def functional_test(args):
+    """Runs the functional tests."""
+    # -l/--list
+    if getattr(args, "list", False):
+        print(list(_get_test_module_dict("functional")))
+        return 0
+
+    cmd = 'pytest'
+    # -a/--all
+    if getattr(args, "-a", False): # pragma: no cover
+        cmd += 
+    # Run unit tests related to a single module
+    elif getattr(args, "unit", False): # pragma: no cover
+        unit_path = _get_test_module_dict('unit')[args.unit]
+        cmd += " " + unit_path
+    # Any additional arguments to be passed through to pytest
+    if getattr(args, "pytest_args", False):
+        cmd += " " + " ".join(args.pytest_args)
+    # Run unit tests related to a single module
+    elif getattr(args, "unit", False): # pragma: no cover
+        unit_path = _get_test_module_dict('unit')[args.unit]
+        cmd += " " + unit_path
+    # Any additional arguments to be passed through to pytest
+    if getattr(args, "pytest_args", False): # pragma: no cover
+        cmd += " " + " ".join(args.pytest_args)
+
+
+def unit_test(args):
+    """Runs the unit tests."""
+    # -l/--list
+    if getattr(args, "list", False):
+        print(list(_get_test_module_dict("unit")))
+        return 0
+ 
+    cmd = "pytest"
+    # -a/--all
+    if getattr(args, "-a", False): # pragma: no cover
+        cmd.append(" --cov")
+    # Run unit tests related to a single module
+    elif getattr(args, "unit", False): # pragma: no cover
+        unit_path = _get_test_module_dict('unit')[args.unit]
+        cmd += " " + unit_path
+    # Any additional arguments to be passed through to pytest
+    if getattr(args, "pytest_args", False): # pragma: no cover
+        cmd += " " + " ".join(args.pytest_args)
+
+    return _run_in_test_environment(cmd)
+
+
+def reset(): # pragma: no cover
+    """Clears the SecureDrop development applications' state, restoring them to
+    the way they were immediately after running `setup_dev.sh`. This command:
+    1. Erases the development sqlite database file.
+    2. Regenerates the database.
+    3. Erases stored submissions and replies from the store dir.
     """
     import config
     import db
 
     # Erase the development db file
-    assert hasattr(
-        config, 'DATABASE_FILE'), "TODO: ./manage.py doesn't know how to clear the db if the backend is not sqlite"
+    assert hasattr(config, 'DATABASE_FILE'), ("TODO: ./manage.py doesn't know "
+                                              "how to clear the db if the "
+                                              "backend is not sqlite")
     os.remove(config.DATABASE_FILE)
 
     # Regenerate the database
@@ -106,9 +189,18 @@ def reset():
     for source_dir in os.listdir(config.STORE_DIR):
         # Each entry in STORE_DIR is a directory corresponding to a source
         shutil.rmtree(os.path.join(config.STORE_DIR, source_dir))
+    return 0
 
 
 def add_admin():
+    return _add_user(is_admin=True)
+
+
+def add_journalist():
+    return _add_user()
+
+
+def _add_user(is_admin=False):
     while True:
         username = raw_input("Username: ")
         if Journalist.query.filter_by(username=username).first():
@@ -132,7 +224,7 @@ def add_admin():
 
     hotp_input = raw_input("Is this admin using a YubiKey [HOTP]? (y/N): ")
     otp_secret = None
-    if hotp_input.lower() == "y" or hotp_input.lower() == "yes":
+    if hotp_input.lower() in ('y', 'yes'):
         while True:
             otp_secret = raw_input(
                 "Please configure your YubiKey and enter the secret: ")
@@ -151,26 +243,23 @@ def add_admin():
             print "ERROR: That username is already taken!"
         else:
             print "ERROR: An unexpected error occurred, traceback: \n{}".format(e)
+        return 1
     else:
         print "Admin '{}' successfully added".format(username)
         if not otp_secret:
             # Print the QR code for Google Authenticator
-            print
-            print "Scan the QR code below with Google Authenticator:"
-            print
-            uri = admin.totp.provisioning_uri(
-                username,
-                issuer_name="SecureDrop")
+            print("\nScan the QR code below with Google Authenticator:\n")
+            uri = admin.totp.provisioning_uri(username, issuer_name="SecureDrop")
             qr = qrcode.QRCode()
             qr.add_data(uri)
             qr.print_ascii(tty=sys.stdout.isatty())
-            print
-            print "If the barcode does not render correctly, try changing your terminal's font, (Monospace for Linux, Menlo for OS X)."
-            print "If you are using iTerm on Mac OS X, you will need to change the \"Non-ASCII Font\", which is your profile's Text settings."
-            print
-            print "Can't scan the barcode? Enter following shared secret manually:"
-            print admin.formatted_otp_secret
-            print
+            print('\nIf the barcode does not render correctly, try changing '
+                  "your terminal's font (Monospace for Linux, Menlo for OS X)."
+                  'If you are using iTerm on Mac OS X, you will need to '
+                  'change the "Non-ASCII Font", which is your profile\'s Text'
+                  'settings.')
+            print("\nCan't scan the barcode? Enter following shared secret "
+                  'manually:\n{admin.formatted_otp_secret}\n')
 
 
 def delete_user():
@@ -191,10 +280,10 @@ def delete_user():
     print "User '{}' successfully deleted".format(username)
 
 
-def clean_tmp():
-    """Cleanup the SecureDrop temp directory. This is intended to be run as an
-    automated cron job. We skip files that are currently in use to avoid
-    deleting files that are currently being downloaded."""
+def clean_tmp(): # pragma: no cover
+    """Cleanup the SecureDrop temp directory. This is intended to be run
+    as an automated cron job. We skip files that are currently in use to
+    avoid deleting files that are currently being downloaded."""
     # Inspired by http://stackoverflow.com/a/11115521/1093000
     import config
 
@@ -226,41 +315,66 @@ def clean_tmp():
             os.remove(path)
 
 
-def get_args():  # pragma: no cover
-    parser = ArgumentParser(prog=__file__,
-                            description='A tool to help admins manage and devs hack')
+def get_args():
+    parser = argparse.ArgumentParser(prog=__file__, description='Management '
+                                     'and testing for SecureDrop.')
+    subps = parser.add_subparsers()
+    # Run 1+ unit tests with pytest--pass options
+    unit_subp = subps.add_parser('unit-test', help='Run 1+ unit tests with '
+                                 'options (see subcommand help).')
+    unit_subp.set_defaults(func=unit_test)
+    unit_excl = unit_subp.add_mutually_exclusive_group(required=True)
+    unit_excl.add_argument('-a', '--all', action='store_true',
+                           help='Run all unit tests with coverage report.')
+    unit_excl.add_argument('-l', '--list', action='store_true',
+                           help='List all unit tests.')
+    unit_excl.add_argument('unit', nargs='?', help='Run a unit test. See -l to'
+                           'list unit tests.')
+    unit_subp.add_argument('pytest_args', nargs=argparse.REMAINDER,
+                           help='Any trailing args are passed to pytest '
+                           '(--pdb, -x, --ff, etc.).')
+    # Run the full test suite
+    test_subp = subps.add_parser('test', help='Run the full test suite.')
+    test_subp.set_defaults(func=test)
+    # Run WSGI app
+    run_subp = subps.add_parser('run', help='Run the werkzeug source &'
+                                'journalist WSGI apps.')
+    run_subp.set_defaults(func=run)
+    # Add/remove journalists + admins
+    admin_subp = subps.add_parser('add-admin', help='Add an admin to the '
+                                  'application.')
+    admin_subp.set_defaults(func=add_admin)
+    journalist_subp = subps.add_parser('add-journalist', help='Add a '
+                                       'journalist to the application.')
+    journalist_subp.set_defaults(func=add_admin)
+    delete_user_subp = subps.add_parser('delete-user', help='Delete a user '
+                                        'from the application')
+    delete_user_subp.set_defaults(func=delete_user)
 
-    subparsers = parser.add_subparsers()
-
-    run_subparser = subparsers.add_parser('run', help='Run the dev webserver (source & journalist)')
-    run_subparser.set_defaults(func=run)
-
-    unit_test_subparser = subparsers.add_parser('unit-test', help='Run the unit tests')
-    unit_test_subparser.set_defaults(func=test_unit)
-
-    test_subparser = subparsers.add_parser('test', help='Run the full test suite')
-    test_subparser.set_defaults(func=test)
-
-    reset_subparser = subparsers.add_parser('reset', help="DANGER!!! Clears the SecureDrop application's state")
-    reset_subparser.set_defaults(func=reset)
-
-    add_admin_subparser = subparsers.add_parser('add-admin', help='Add a new admin to the application')
-    add_admin_subparser.set_defaults(func=add_admin)
-
-    delete_user_subparser = subparsers.add_parser('delete-user', help='Delete a user from the application')
-    delete_user_subparser.set_defaults(func=delete_user)
-
-    clean_tmp_subparser = subparsers.add_parser('clean-tmp', help='Cleanup the SecureDrop temp directory')
-    clean_tmp_subparser.set_defaults(func=clean_tmp)
+    # Reset application state
+    reset_subp = subps.add_parser('reset', help='DANGER!!! Clears the '
+                                  "SecureDrop application's state.")
+    reset_subp.set_defaults(func=reset)
+    # Cleanup the SD temp dir
+    clean_tmp_subp = subps.add_parser('clean-tmp', help='Cleanup the '
+                                      'SecureDrop temp directory.')
+    clean_tmp_subp.set_defaults(func=clean_tmp)
 
     return parser
 
 
-if __name__ == "__main__":  # pragma: no cover
+def _run_from_commandline(): # pragma: no cover
     try:
         args = get_args().parse_args()
-        # calling like this works because all functions take zero arguments
-        args.func()
+        if len(args._get_kwargs()) > 1:
+            rc = args.func(args)
+        else:
+            rc = args.func()
     except KeyboardInterrupt:
-        print  # So our prompt appears on a nice new line
-        exit(1)
+        exit(signal.SIGINT)
+    finally: 
+        _stop_test_rqworker()
+
+
+if __name__ == "__main__": # pragma: no cover
+    _run_from_commandline()
