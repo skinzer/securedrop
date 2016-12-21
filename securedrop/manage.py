@@ -120,11 +120,8 @@ def _get_test_module_dict(type):
 
 def test(): # pragma: no cover
     """Runs both functional and unit tests."""
-    cmds = []
-    cmds.append('pytest --cov')
-    for test in _get_test_module_dict('functional').values():
-        cmds.append('python -m unittest -fv {}'.format(test))
-    return any([int(_run_in_test_environment(cmd)) for cmd in cmds])
+    return _run_in_test_environment("pytest --cov")
+
 
 def functional_test(args):
     """Runs the functional tests."""
@@ -133,44 +130,59 @@ def functional_test(args):
         print(list(_get_test_module_dict("functional")))
         return 0
 
-    cmd = 'pytest'
+    cmd = 'pytest '
     # -a/--all
     if getattr(args, "-a", False): # pragma: no cover
-        cmd += 
+        cmd += '--cov'
     # Run unit tests related to a single module
     elif getattr(args, "unit", False): # pragma: no cover
         unit_path = _get_test_module_dict('unit')[args.unit]
-        cmd += " " + unit_path
+        cmd += unit_path
     # Any additional arguments to be passed through to pytest
     if getattr(args, "pytest_args", False):
-        cmd += " " + " ".join(args.pytest_args)
+        cmd += ' '.join(args.pytest_args)
     # Run unit tests related to a single module
     elif getattr(args, "unit", False): # pragma: no cover
-        unit_path = _get_test_module_dict('unit')[args.unit]
-        cmd += " " + unit_path
+        try:
+            unit_path = _get_test_module_dict('functional')[args.unit]
+        except KeyError:
+            print('No functional test "{}" found. To list all unit tests run '
+                  '`./manage.py unit -l`.'.format(args.unit))
+            return 1
+        else:
+            cmd += module_path
     # Any additional arguments to be passed through to pytest
     if getattr(args, "pytest_args", False): # pragma: no cover
-        cmd += " " + " ".join(args.pytest_args)
+        cmd += ' '.join(args.pytest_args)
+
+    return _run_in_test_environment(cmd)
 
 
 def unit_test(args):
     """Runs the unit tests."""
     # -l/--list
-    if getattr(args, "list", False):
-        print(list(_get_test_module_dict("unit")))
+    if getattr(args, 'list', False):
+        print(list(_get_test_module_dict('unit')))
         return 0
  
-    cmd = "pytest"
+    cmd = 'pytest '
     # -a/--all
     if getattr(args, "-a", False): # pragma: no cover
-        cmd.append(" --cov")
+        cmd += '--cov --ignore={}'.format(
+            os.path.join(ABS_MODULE_PATH, 'tests', 'functional'))
     # Run unit tests related to a single module
     elif getattr(args, "unit", False): # pragma: no cover
-        unit_path = _get_test_module_dict('unit')[args.unit]
-        cmd += " " + unit_path
+        try:
+            module_path = _get_test_module_dict('unit')[args.unit]
+        except KeyError:
+            print('No unit test "{}" found. To list all unit tests run '
+                  '`./manage.py unit -l`.'.format(args.unit))
+            return 1
+        else:
+            cmd += module_path
     # Any additional arguments to be passed through to pytest
-    if getattr(args, "pytest_args", False): # pragma: no cover
-        cmd += " " + " ".join(args.pytest_args)
+    if getattr(args, 'pytest_args', False): # pragma: no cover
+        cmd += ' '.join(args.pytest_args)
 
     return _run_in_test_environment(cmd)
 
@@ -231,7 +243,7 @@ def _add_user(is_admin=False):
             break
         print "Passwords didn't match!"
 
-    hotp_input = raw_input("Is this admin using a YubiKey [HOTP]? (y/N): ")
+    hotp_input = raw_input("Will this user be using a YubiKey [HOTP]? (y/N): ")
     otp_secret = None
     if hotp_input.lower() in ('y', 'yes'):
         while True:
@@ -241,11 +253,11 @@ def _add_user(is_admin=False):
                 break
 
     try:
-        admin = Journalist(username=username,
-                           password=password,
-                           is_admin=True,
-                           otp_secret=otp_secret)
-        db_session.add(admin)
+        user = Journalist(username=username,
+                          password=password,
+                          is_admin=is_admin,
+                          otp_secret=otp_secret)
+        db_session.add(user)
         db_session.commit()
     except Exception as exc:
         if "username is not unique" in str(exc):
@@ -255,7 +267,7 @@ def _add_user(is_admin=False):
             traceback.print_exc()
         return 1
     else:
-        print "Admin '{}' successfully added".format(username)
+        print 'User "{}" successfully added'.format(username)
         if not otp_secret:
             # Print the QR code for Google Authenticator
             print("\nScan the QR code below with Google Authenticator:\n")
@@ -270,13 +282,11 @@ def _add_user(is_admin=False):
                   'settings.')
             print("\nCan't scan the barcode? Enter following shared secret "
                   'manually:\n{admin.formatted_otp_secret}\n')
+        return 0
 
 
 def delete_user():
-    """
-    Deletes a journalist or administrator from the application.
-    """
-
+    """Deletes a journalist or administrator from the application."""
     while True:
         username = raw_input("Username to delete: ")
         try:
@@ -288,6 +298,7 @@ def delete_user():
     db_session.delete(selected_user)
     db_session.commit()
     print "User '{}' successfully deleted".format(username)
+    return 0
 
 
 def clean_tmp(): # pragma: no cover
@@ -316,6 +327,7 @@ def clean_tmp(): # pragma: no cover
 
         return in_use
 
+
     def listdir_fullpath(d):
         # Thanks to http://stackoverflow.com/a/120948/1093000
         return [os.path.join(d, f) for f in os.listdir(d)]
@@ -324,13 +336,15 @@ def clean_tmp(): # pragma: no cover
         if not file_in_use(path):
             os.remove(path)
 
+    return 0
+
 
 def get_args():
     parser = argparse.ArgumentParser(prog=__file__, description='Management '
                                      'and testing for SecureDrop.')
     subps = parser.add_subparsers()
     # Run 1+ unit tests with pytest--pass options
-    unit_subp = subps.add_parser('unit-test', help='Run 1+ unit tests with '
+    unit_subp = subps.add_parser('unit', help='Run 1+ unit tests with '
                                  'options (see subcommand help).')
     unit_subp.set_defaults(func=unit_test)
     unit_excl = unit_subp.add_mutually_exclusive_group(required=True)
@@ -343,11 +357,25 @@ def get_args():
     unit_subp.add_argument('pytest_args', nargs=argparse.REMAINDER,
                            help='Any trailing args are passed to pytest '
                            '(--pdb, -x, --ff, etc.).')
+    # Run 1+ functional tests with pytest--pass options
+    functional_subp = subps.add_parser('functional', help='Run 1+ functional tests with '
+                                 'options (see subcommand help).')
+    functional_subp.set_defaults(func=functional_test)
+    functional_excl = functional_subp.add_mutually_exclusive_group(required=True)
+    functional_excl.add_argument('-a', '--all', action='store_true',
+                           help='Run all functional tests with coverage report.')
+    functional_excl.add_argument('-l', '--list', action='store_true',
+                           help='List all functional tests.')
+    functional_excl.add_argument('functional', nargs='?', help='Run a functional test. See -l to'
+                           'list functional tests.')
+    functional_subp.add_argument('pytest_args', nargs=argparse.REMAINDER,
+                           help='Any trailing args are passed to pytest '
+                           '(--pdb, -x, --ff, etc.).')
     # Run the full test suite
     test_subp = subps.add_parser('test', help='Run the full test suite.')
     test_subp.set_defaults(func=test)
     # Run WSGI app
-    run_subp = subps.add_parser('run', help='Run the werkzeug source &'
+    run_subp = subps.add_parser('run', help='Run the werkzeug source & '
                                 'journalist WSGI apps.')
     run_subp.set_defaults(func=run)
     # Add/remove journalists + admins
@@ -380,8 +408,9 @@ def _run_from_commandline(): # pragma: no cover
             rc = args.func(args)
         else:
             rc = args.func()
+        sys.exit(rc)
     except KeyboardInterrupt:
-        exit(signal.SIGINT)
+        sys.exit(signal.SIGINT)
     finally: 
         _stop_test_rqworker()
 
