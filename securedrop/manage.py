@@ -9,6 +9,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import traceback
 
 import psutil
 import qrcode
@@ -246,11 +247,12 @@ def _add_user(is_admin=False):
                            otp_secret=otp_secret)
         db_session.add(admin)
         db_session.commit()
-    except Exception as e:
-        if "username is not unique" in str(e):
+    except Exception as exc:
+        if "username is not unique" in str(exc):
             print "ERROR: That username is already taken!"
         else:
-            print "ERROR: An unexpected error occurred, traceback: \n{}".format(e)
+            print('ERROR: An unexpected error occurred, traceback:')
+            traceback.print_exc()
         return 1
     else:
         print "Admin '{}' successfully added".format(username)
