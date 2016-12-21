@@ -88,23 +88,31 @@ def _run_in_test_environment(cmd): # pragma: no cover
 
 
 def _get_test_module_dict(type):
-    """A convenience function that allows a user to pass, e.g., "journalist"
-    instead of "tests/test_unit_journalist.py"."""
+    """A convenience function that allows a user to pass, e.g.,
+    "journalist" instead of "tests/test_unit_journalist.py". Returns a
+    :obj:`dict` mapping of module keywords to absolute module paths.
+    
+    :param str type: The type, either 'functional' or 'unit' of tests to
+                     gather.
+    """
+    tests, test_paths = [], []
+
     if type == 'functional':
-        tests = ['submit_and_retrieve_message', 
-                 'submit_and_retrieve_file', 'admin_interface']
-        test_paths = [os.path.join(ABS_MODULE_PATH, 'tests/functional',
-                                   test, ".py")
-                      for test in tests]
+        test_dir = os.path.join(ABS_MODULE_PATH, 'tests', 'functional')
+        prefix = 'test_'
     elif type == 'unit':
-        tests, test_paths = [], []
-        for file in os.listdir(os.path.join(ABS_MODULE_PATH, 'tests')):
-            if fnmatch.fnmatch(file, 'test_unit_*.py'):
-                tests.append(file[len('test_unit_'):-len('.py')])
-                test_paths.append(os.path.join(ABS_MODULE_PATH, 'tests', file))
-        # Add irregularly named unit tests
+        test_dir = os.path.join(ABS_MODULE_PATH, 'tests')
+        prefix = 'test_unit_'
+        # Add irregularly named unit tests. TODO: consider combining journalist
+        # unit tests and dropping 'unit' from all unit tests.
         tests += ['test_journalist', 'test_single_star']
-        test_paths += [os.path.join(ABS_MODULE_PATH), 'tests', file]
+        test_paths += [os.path.join(test_dir, test + '.py')
+                       for test in tests]
+        
+    for file in os.listdir(test_dir):
+        if fnmatch.fnmatch(file, prefix + '*'):
+            tests.append(file[len(prefix):-len('.py')])
+            test_paths.append(os.path.join(test_dir, file))
 
     return dict(zip(tests, test_paths))
 
