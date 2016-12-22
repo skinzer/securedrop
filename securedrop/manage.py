@@ -132,11 +132,12 @@ def functional_test(args):
 
     cmd = 'pytest '
     # -a/--all
-    if getattr(args, "-a", False): # pragma: no cover
-        cmd += '--cov'
+    if getattr(args, "all", False): # pragma: no cover
+        cmd += '--cov '
+        cmd += ' '.join(_get_test_module_dict('functional').values())
     # Run unit tests related to a single module
-    elif getattr(args, "unit", False): # pragma: no cover
-        unit_path = _get_test_module_dict('unit')[args.unit]
+    elif getattr(args, "functional", False): # pragma: no cover
+        unit_path = _get_test_module_dict('functional')[args.unit]
         cmd += unit_path
     # Any additional arguments to be passed through to pytest
     if getattr(args, "pytest_args", False):
@@ -358,10 +359,11 @@ def get_args():
                            help='Any trailing args are passed to pytest '
                            '(--pdb, -x, --ff, etc.).')
     # Run 1+ functional tests with pytest--pass options
-    functional_subp = subps.add_parser('functional', help='Run 1+ functional tests with '
-                                 'options (see subcommand help).')
+    functional_subp = subps.add_parser('functional', help='Run 1+ functional '
+                                       'tests (see subcommand help).')
     functional_subp.set_defaults(func=functional_test)
-    functional_excl = functional_subp.add_mutually_exclusive_group(required=True)
+    functional_excl = functional_subp.add_mutually_exclusive_group(
+        required=True)
     functional_excl.add_argument('-a', '--all', action='store_true',
                            help='Run all functional tests with coverage report.')
     functional_excl.add_argument('-l', '--list', action='store_true',
