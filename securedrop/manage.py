@@ -353,8 +353,8 @@ def get_args():
                            help='Run all unit tests with coverage report.')
     unit_excl.add_argument('-l', '--list', action='store_true',
                            help='List all unit tests.')
-    unit_excl.add_argument('unit', nargs='?', help='Run a unit test. See -l to'
-                           'list unit tests.')
+    unit_excl.add_argument('unit', nargs='?', help='Run a unit test. See -l '
+                           'to list unit tests.')
     unit_subp.add_argument('pytest_args', nargs=argparse.REMAINDER,
                            help='Any trailing args are passed to pytest '
                            '(--pdb, -x, --ff, etc.).')
@@ -365,11 +365,13 @@ def get_args():
     functional_excl = functional_subp.add_mutually_exclusive_group(
         required=True)
     functional_excl.add_argument('-a', '--all', action='store_true',
-                           help='Run all functional tests with coverage report.')
+                           help='Run all functional tests with coverage '
+                                 'report.')
     functional_excl.add_argument('-l', '--list', action='store_true',
                            help='List all functional tests.')
-    functional_excl.add_argument('functional', nargs='?', help='Run a functional test. See -l to'
-                           'list functional tests.')
+    functional_excl.add_argument('functional', nargs='?', help='Run a '
+                                 'functional test. See -l to list '
+                                 'functional tests.')
     functional_subp.add_argument('pytest_args', nargs=argparse.REMAINDER,
                            help='Any trailing args are passed to pytest '
                            '(--pdb, -x, --ff, etc.).')
