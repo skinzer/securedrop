@@ -31,6 +31,9 @@ script:
   # securedrop_user default www-data
 - sudo chown root:root securedrop/config.py
 - sudo sh -c "export DISPLAY=:1; cd securedrop && ./manage.py test"
+addons:
+    srcclr:
+        debug: true
 after_success:
   cd securedrop && coveralls
 notifications:
