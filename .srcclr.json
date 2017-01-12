@@ -1,3 +1,3 @@
 {
-  "pipRequirementsFile": "securedrop/requirements/secure-requirements.txt"
+  "pipRequirementsFile": "requirements/secure-requirements.txt"
 }
